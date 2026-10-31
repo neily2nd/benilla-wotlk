@@ -15,6 +15,8 @@ pub(crate) struct WmoDoodadInst {
     pub(crate) groups: Arc<[u16]>,
     pub(crate) light: PropLight,
     pub(crate) spawned: bool,
+    /// This authored prop failed to load; collision availability is unknown.
+    pub(crate) failed: bool,
     /// The prop's wake record when it can sleep ([`super::Sleeper`]).
     pub(crate) sleeper: Option<super::Sleeper>,
 }

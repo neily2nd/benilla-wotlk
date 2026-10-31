@@ -206,6 +206,7 @@ mod tests {
             transform: Transform::IDENTITY,
             entities: Vec::new(),
             spawned: true,
+            failed: false,
             doodad_set: 0,
             name_set: 0,
             doodads: Vec::new(),

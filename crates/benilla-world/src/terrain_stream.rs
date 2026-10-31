@@ -92,6 +92,14 @@ pub struct TerrainStreamer {
     focus: (i32, i32),
     /// The window's `(inner, outer)` half-widths last frame, logged once per change.
     reach: Option<(i32, i32)>,
+    /// Pinned tiles present in the active map's WDT, resolved on that map's WDT.
+    pinned_tiles: std::collections::BTreeSet<(i32, i32)>,
+    /// Requested pins snapshot, used to invalidate the unchanged-window fast path.
+    pin_request: std::collections::BTreeSet<(i32, i32)>,
+    /// False until the current map's WDT has loaded; missing WDT data is never treated as clear.
+    pins_resolved: bool,
+    /// Every pinned ADT, placement and associated collision build is available to body queries.
+    pins_collision_ready: bool,
     /// The window last streamed around, focus chunk and radii: an unchanged one skips the walk.
     window: Option<StreamWindow>,
     /// The map's WDT tile index: ADT requests wait for it and consult its `MAIN` grid.
@@ -110,6 +118,44 @@ pub struct TerrainStreamer {
     off_grid_reported: Option<(i32, i32)>,
 }
 
+/// ADT tiles that must remain resident even when they are outside the camera's view window.
+///
+/// Gameplay that needs world collision away from the camera can pin the map-authored tiles it
+/// owns. The normal streamer still loads each tile through the same WDT, ADT, placement and
+/// collider pipeline; this resource changes residency only and does not synthesize geometry.
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct TerrainResidencyPins {
+    tiles: std::collections::BTreeSet<(i32, i32)>,
+}
+
+fn outside_residency_window(
+    window: StreamWindow,
+    tile: (i32, i32),
+    pinned: &std::collections::BTreeSet<(i32, i32)>,
+) -> bool {
+    !window.keeps(tile) && !pinned.contains(&tile)
+}
+
+impl TerrainResidencyPins {
+    /// Replace the pinned set. Coordinates outside the WDT's 64x64 tile grid are ignored.
+    pub fn set_tiles(&mut self, tiles: impl IntoIterator<Item = (i32, i32)>) {
+        self.tiles = tiles
+            .into_iter()
+            .filter(|&(x, y)| (0..64).contains(&x) && (0..64).contains(&y))
+            .collect();
+    }
+
+    /// Release every pin. The ordinary view window remains resident.
+    pub fn clear(&mut self) {
+        self.tiles.clear();
+    }
+
+    /// Pinned tile coordinates, in stable order.
+    pub fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.tiles.iter().copied()
+    }
+}
+
 /// The map-global WMO's placement id: a WMO-only map has no ADT uniqueIds to collide with, and this
 /// is the file's own dead `uniqueId` (the reference overwrites it from a counter).
 const GLOBAL_WMO_UID: u32 = u32::MAX;
@@ -119,6 +165,24 @@ impl TerrainStreamer {
     pub fn residency(&self) -> (usize, usize) {
         let spawned = self.tiles.values().filter(|t| t.furnished).count();
         (spawned, self.tiles.len())
+    }
+
+    /// Whether every pinned tile that exists in the active map has been furnished.
+    ///
+    /// Returns `false` until the active map's WDT is available. Pins absent from the WDT are
+    /// excluded by the same authored-tile check used by normal streaming.
+    pub fn pins_furnished(&self) -> bool {
+        self.pins_resolved
+            && self
+                .pinned_tiles
+                .iter()
+                .all(|tile| self.tiles.get(tile).is_some_and(|state| state.furnished))
+    }
+
+    /// Whether pinned terrain and its authored collision placements are available to queries.
+    /// Missing, pending or failed client data keeps this false instead of treating it as empty.
+    pub fn pins_collision_ready(&self) -> bool {
+        self.pins_collision_ready
     }
 }
 
@@ -179,6 +243,8 @@ struct Placement {
     entities: Vec<Entity>,
     /// Spawned, or found to have nothing to spawn.
     spawned: bool,
+    /// A referenced client model failed to load, so its collision contribution is unknown.
+    failed: bool,
     /// The MODF doodad set shown beside set 0 (WMOs only).
     doodad_set: u16,
     /// The MODF name set (WMOs only): the placement's `WMOAreaTable.NameSetID`.
@@ -209,6 +275,8 @@ pub struct WorldLoadProgress {
     /// The tile under the view focus is furnished; false at startup and whenever a teleport lands
     /// on unloaded ground, same map or not, which is the loading screen's backstop trigger.
     pub focus_resident: bool,
+    /// Pinned terrain and all referenced static collision geometry are query-ready.
+    pub pinned_collision_ready: bool,
     /// The focus tile and its 8 neighbours are up with every placement they reference; consumers
     /// read [`Self::presentable`], which adds the backlogs.
     pub scene_ready: bool,
@@ -247,6 +315,7 @@ impl WorldLoadProgress {
     /// the settle release key on.
     pub fn presentable(&self) -> bool {
         self.scene_ready
+            && self.pinned_collision_ready
             && self.colliders_pending == 0
             && self.merge_pending == 0
             && self.gx_pending == 0
@@ -408,6 +477,7 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<ViewFocus>()
             .init_resource::<WorldLoadProgress>()
             .init_resource::<TerrainStreamer>()
+            .init_resource::<TerrainResidencyPins>()
             .init_resource::<StreamActivity>()
             .init_resource::<Placements>()
             .init_resource::<HullWelds>()
@@ -427,6 +497,7 @@ impl Plugin for TerrainPlugin {
                     flush_hull_welds,
                     flush_static_merge,
                     sync_interior_volumes,
+                    update_pinned_collision_readiness,
                 )
                     .chain()
                     .in_set(WorldStage::Stream)
@@ -478,7 +549,7 @@ impl Plugin for TerrainPlugin {
 #[allow(clippy::type_complexity)] // the bundled asset_stores tuple
 fn stream_terrain(
     mut commands: Commands,
-    mut state: ResMut<TerrainStreamer>,
+    (mut state, pins): (ResMut<TerrainStreamer>, Res<TerrainResidencyPins>),
     placements: ResMut<Placements>,
     asset_server: Res<AssetServer>,
     tiles: Res<Assets<AdtTile>>,
@@ -543,6 +614,9 @@ fn stream_terrain(
             &mut activity,
         );
         state.map_dir = Some(dir.clone());
+        state.pinned_tiles.clear();
+        state.pins_resolved = false;
+        state.pins_collision_ready = false;
         state.wdt = Some(asset_server.load(format!("mpq://World/Maps/{dir}/{dir}.wdt")));
         state.wdt_ungated = false;
     }
@@ -591,9 +665,12 @@ fn stream_terrain(
     let (cx, cy) = window.focus_tile();
     // Keyed by chunk: the window slides a chunk at a time, so a tile key misses the tile ahead.
     let same_window = state.window == Some(window);
+    let requested_pins: std::collections::BTreeSet<_> = pins.tiles().collect();
+    let same_pins = state.pin_request == requested_pins;
     // Skip an unchanged frame only in a paced, complete, presentable world, since the tail it
     // bypasses releases a load; even then the undrawn count stays fresh, so a rebake un-skips it.
     if same_window
+        && same_pins
         && state.settled
         && focus.paced
         && state.was_paced == focus.paced
@@ -609,6 +686,7 @@ fn stream_terrain(
     }
     state.focus = (cx, cy);
     state.window = Some(window);
+    state.pin_request = requested_pins;
     if state.reach != Some((window.inner, window.outer)) {
         state.reach = Some((window.inner, window.outer));
         info!(
@@ -620,11 +698,21 @@ fn stream_terrain(
         );
     }
 
-    // Every tile the outer window touches on the 64×64 grid, less those the WDT's `MAIN` bit 0 says
-    // do not exist, as the reference tests.
+    // The WDT is authoritative for both view tiles and pinned off-camera tiles.
     let mut desired = window.wanted_tiles();
     if let Some(w) = wdt_index {
         desired.retain(|&(tx, ty)| w.has_tile(tx as u32, ty as u32));
+        state.pinned_tiles = pins
+            .tiles()
+            .filter(|&(tx, ty)| w.has_tile(tx as u32, ty as u32))
+            .collect();
+        state.pins_resolved = true;
+        desired.extend(state.pinned_tiles.iter().copied());
+    } else {
+        // Missing WDT data is not evidence of clear terrain. Leave the pin readiness gate closed.
+        state.pinned_tiles.clear();
+        state.pins_resolved = false;
+        state.pins_collision_ready = false;
     }
 
     // A focus off the map's tile grid, usually one written in another map's coordinates, wants no
@@ -660,7 +748,7 @@ fn stream_terrain(
             .tiles
             .keys()
             .copied()
-            .filter(|&tile| !window.keeps(tile))
+            .filter(|&tile| outside_residency_window(window, tile, &state.pinned_tiles))
             .collect()
     };
     let stale_empty = stale.is_empty();
@@ -934,6 +1022,48 @@ fn stream_terrain(
     activity.stream_ms += t0.elapsed().as_secs_f32() * 1000.0;
 }
 
+/// Closes the camera-independent collision gate after terrain, placements and hull tasks settle.
+fn update_pinned_collision_readiness(
+    mut streamer: ResMut<TerrainStreamer>,
+    placements: Res<Placements>,
+    pending_colliders: Query<(), With<PendingCollider>>,
+    mut progress: Option<ResMut<WorldLoadProgress>>,
+) {
+    streamer.pins_collision_ready = streamer.pins_resolved
+        && streamer.pinned_tiles.iter().all(|tile_key| {
+            let Some(tile) = streamer.tiles.get(tile_key).filter(|tile| tile.furnished) else {
+                return false;
+            };
+            if tile
+                .entity
+                .into_iter()
+                .chain(tile.wall)
+                .chain(tile.welds.iter().copied())
+                .any(|entity| pending_colliders.get(entity).is_ok())
+            {
+                return false;
+            }
+            tile.placements.iter().all(|id| {
+                let Some(placement) = placements.by_id.get(id) else {
+                    return false;
+                };
+                placement.spawned
+                    && !placement.failed
+                    && placement
+                        .doodads
+                        .iter()
+                        .all(|doodad| doodad.spawned && !doodad.failed)
+                    && placement
+                        .entities
+                        .iter()
+                        .all(|entity| pending_colliders.get(*entity).is_err())
+            })
+        });
+    if let Some(progress) = progress.as_deref_mut() {
+        progress.pinned_collision_ready = streamer.pins_collision_ready;
+    }
+}
+
 /// `WOW_NO_TILE_DROP=1`: never release stale tiles, so a crossing only adds (dev-only).
 fn tile_drop_disabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -968,6 +1098,7 @@ fn register_doodad<'a>(
             },
             entities: Vec::new(),
             spawned: false,
+            failed: false,
             doodad_set: 0, // M2 doodads carry no doodad set
             name_set: 0,
             doodads: Vec::new(),
@@ -999,6 +1130,7 @@ fn register_wmo(placements: &mut Placements, asset_server: &AssetServer, w: &Wmo
             },
             entities: Vec::new(),
             spawned: false,
+            failed: false,
             doodad_set: w.doodad_set,
             name_set: w.name_set,
             doodads: Vec::new(),
@@ -1042,6 +1174,13 @@ fn drop_streamed_world(
     if let Some(gx) = staticgx {
         gx.clear();
     }
+    state.pinned_tiles.clear();
+    state.pin_request.clear();
+    state.pins_resolved = false;
+    state.pins_collision_ready = false;
+    state.window = None;
+    state.reach = None;
+    state.settled = false;
     crate::static_merge::reset();
 }
 
@@ -1386,6 +1525,123 @@ mod focus_tests {
 mod residency_tests {
     use super::*;
 
+    fn tile(furnished: bool) -> TileState {
+        TileState {
+            handle: Default::default(),
+            entity: None,
+            material: None,
+            next_cell: 0,
+            furnished,
+            placements: Vec::new(),
+            liquid: Vec::new(),
+            wall: None,
+            clutter: Vec::new(),
+            welds: Vec::new(),
+            merged: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pins_reject_off_grid_tiles_and_deduplicate() {
+        let mut pins = TerrainResidencyPins::default();
+        pins.set_tiles([(5, 6), (5, 6), (-1, 0), (64, 0), (0, 64)]);
+        assert_eq!(pins.tiles().collect::<Vec<_>>(), [(5, 6)]);
+        pins.clear();
+        assert_eq!(pins.tiles().count(), 0);
+    }
+
+    #[test]
+    fn pinned_tiles_prevent_unload_and_must_be_furnished_before_ready() {
+        let window = StreamWindow::at(350.0, 0.0, 0.0);
+        let outside = (63, 63);
+        assert!(outside_residency_window(
+            window,
+            outside,
+            &Default::default()
+        ));
+        let pinned = std::collections::BTreeSet::from([outside]);
+        assert!(!outside_residency_window(window, outside, &pinned));
+
+        let mut streamer = TerrainStreamer::default();
+        streamer.pinned_tiles.insert(outside);
+        assert!(!streamer.pins_furnished(), "unresolved WDT is not ready");
+        streamer.pins_resolved = true;
+        assert!(
+            !streamer.pins_furnished(),
+            "an unrequested tile is not ready"
+        );
+        streamer.tiles.insert(outside, tile(false));
+        assert!(!streamer.pins_furnished(), "unfurnished tile is not ready");
+        streamer.tiles.get_mut(&outside).unwrap().furnished = true;
+        assert!(streamer.pins_furnished());
+    }
+
+    #[test]
+    fn collision_readiness_waits_for_pinned_placements_and_hull_tasks() {
+        let mut world = World::new();
+        world.init_resource::<TerrainStreamer>();
+        world.init_resource::<Placements>();
+        world.init_resource::<WorldLoadProgress>();
+        let tile_entity = world.spawn_empty().id();
+        let hull_entity = world
+            .spawn(collider::PendingCollider::ready(
+                avian3d::prelude::Collider::sphere(0.5),
+                None,
+                true,
+            ))
+            .id();
+        let pinned_tile = (10, 11);
+        {
+            let mut streamer = world.resource_mut::<TerrainStreamer>();
+            streamer.pins_resolved = true;
+            streamer.pinned_tiles.insert(pinned_tile);
+            let mut tile = tile(true);
+            tile.entity = Some(tile_entity);
+            tile.placements.push(1);
+            streamer.tiles.insert(pinned_tile, tile);
+        }
+        world.resource_mut::<Placements>().by_id.insert(
+            1,
+            Placement {
+                model: ModelHandle::M2(Default::default()),
+                transform: Transform::IDENTITY,
+                entities: vec![hull_entity],
+                spawned: true,
+                failed: false,
+                doodad_set: 0,
+                name_set: 0,
+                doodads: Vec::new(),
+                portal_instance: None,
+                refs: 1,
+                owner: pinned_tile,
+                sleeper: None,
+                probe_slots: Vec::new(),
+            },
+        );
+
+        let mut system = IntoSystem::into_system(update_pinned_collision_readiness);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        assert!(!world.resource::<TerrainStreamer>().pins_collision_ready());
+        assert!(!world.resource::<WorldLoadProgress>().pinned_collision_ready);
+
+        world
+            .entity_mut(hull_entity)
+            .remove::<collider::PendingCollider>();
+        system.run((), &mut world).unwrap();
+        assert!(world.resource::<TerrainStreamer>().pins_collision_ready());
+        assert!(world.resource::<WorldLoadProgress>().pinned_collision_ready);
+
+        world
+            .resource_mut::<Placements>()
+            .by_id
+            .get_mut(&1)
+            .unwrap()
+            .failed = true;
+        system.run((), &mut world).unwrap();
+        assert!(!world.resource::<TerrainStreamer>().pins_collision_ready());
+    }
+
     /// A frame with no placement spawned or released leaves the residency unwritten, even when
     /// another system wrote `Placements` (the art scope touches its material cache every frame).
     #[test]
@@ -1442,6 +1698,7 @@ mod straddler_tests {
             transform: Transform::IDENTITY,
             entities,
             spawned: true,
+            failed: false,
             doodad_set: 0,
             name_set: 0,
             doodads: Vec::new(),

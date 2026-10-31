@@ -230,6 +230,100 @@ impl WorldCollision<'_, '_> {
         )
     }
 
+    /// Move an upright capsule whose input/output position is at its feet, using the world's
+    /// authoritative body collision layers. This avoids exposing Avian types to gameplay crates.
+    pub fn slide_capsule_body(
+        &self,
+        feet: Vec3,
+        velocity: Vec3,
+        delta_time: std::time::Duration,
+        radius: f32,
+        cylinder_height: f32,
+    ) -> Option<Vec3> {
+        if !feet.is_finite()
+            || !velocity.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !cylinder_height.is_finite()
+            || cylinder_height < 0.0
+        {
+            return None;
+        }
+        let offset = Vec3::Y * (radius + cylinder_height * 0.5);
+        let output = self.slide_body(
+            &Collider::capsule(radius, cylinder_height),
+            feet + offset,
+            velocity,
+            delta_time,
+            &MoveAndSlideConfig::default(),
+            |_| MoveAndSlideHitResponse::Accept,
+        );
+        let result = output.position - offset;
+        result.is_finite().then_some(result)
+    }
+
+    /// Whether a feet-based upright capsule can travel in a straight segment without crossing
+    /// any authored body collider. Callers must first ensure the relevant world region is fully
+    /// resident; `true` means clear only for the currently indexed collider set.
+    pub fn capsule_segment_clear(
+        &self,
+        from_feet: Vec3,
+        to_feet: Vec3,
+        radius: f32,
+        cylinder_height: f32,
+    ) -> Option<bool> {
+        if !from_feet.is_finite()
+            || !to_feet.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !cylinder_height.is_finite()
+            || cylinder_height < 0.0
+        {
+            return None;
+        }
+        let offset = Vec3::Y * (radius + cylinder_height * 0.5);
+        let from = from_feet + offset;
+        let movement = to_feet - from_feet;
+        if !from.is_finite() || !movement.is_finite() {
+            return None;
+        }
+        Some(
+            self.cast_body(
+                &Collider::capsule(radius, cylinder_height),
+                from,
+                movement,
+                0.0,
+            )
+            .is_none(),
+        )
+    }
+
+    /// Whether an upright body capsule at `feet` overlaps any resident authored body collider.
+    /// A small upward clearance avoids treating the sampled walkable ground surface as an
+    /// obstacle. Callers still have to gate this query on complete residency for their region.
+    pub fn capsule_clear_at(&self, feet: Vec3, radius: f32, cylinder_height: f32) -> Option<bool> {
+        if !feet.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !cylinder_height.is_finite()
+            || cylinder_height < 0.0
+        {
+            return None;
+        }
+        let center = feet + Vec3::Y * (radius + cylinder_height * 0.5 + 0.02);
+        center.is_finite().then(|| {
+            self.ms
+                .spatial_query
+                .shape_intersections(
+                    &Collider::capsule(radius, cylinder_height),
+                    center,
+                    Quat::IDENTITY,
+                    &Self::body_filter(),
+                )
+                .is_empty()
+        })
+    }
+
     /// [`slide_body`](Self::slide_body) against a caller-supplied filter.
     fn slide_body_with(
         &self,
@@ -681,6 +775,126 @@ mod moved_position_sync {
             p.abs_diff_eq(Vec3::new(2.0, 0.0, 5.0), 1e-5),
             "hull follows: {p}"
         );
+    }
+}
+
+#[cfg(test)]
+mod capsule_movement {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+
+    #[test]
+    fn feet_based_capsule_slides_along_an_authored_body_collider() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            PhysicsPlugins::new(bevy::app::PostUpdate),
+        ));
+        app.init_asset::<bevy::mesh::Mesh>();
+        app.init_resource::<MoverTraceExclusions>();
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(0.4, 3.0, 4.0),
+            Transform::from_xyz(2.0, 1.5, 0.0),
+        ));
+        app.finish();
+        app.cleanup();
+        app.update();
+
+        let position = app
+            .world_mut()
+            .run_system_once(|collision: WorldCollision| {
+                collision.slide_capsule_body(
+                    Vec3::ZERO,
+                    Vec3::X * 4.0,
+                    std::time::Duration::from_secs(1),
+                    0.4,
+                    0.8,
+                )
+            })
+            .expect("collision system runs")
+            .expect("finite capsule move");
+        assert!(position.x < 1.5, "capsule passed through wall: {position}");
+        assert!(
+            position.x > 0.0,
+            "capsule did not advance to the wall: {position}"
+        );
+        assert!(
+            position.z.abs() < 1e-4,
+            "unexpected lateral drift: {position}"
+        );
+    }
+
+    #[test]
+    fn feet_based_capsule_rejects_invalid_geometry_inputs() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            PhysicsPlugins::new(bevy::app::PostUpdate),
+        ));
+        app.init_asset::<bevy::mesh::Mesh>();
+        app.init_resource::<MoverTraceExclusions>();
+        app.finish();
+        app.cleanup();
+        app.update();
+        let result = app
+            .world_mut()
+            .run_system_once(|collision: WorldCollision| {
+                collision.slide_capsule_body(
+                    Vec3::ZERO,
+                    Vec3::X,
+                    std::time::Duration::from_secs(1),
+                    f32::NAN,
+                    0.8,
+                )
+            })
+            .expect("collision system runs");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn capsule_segment_query_uses_authored_body_collision() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            PhysicsPlugins::new(bevy::app::PostUpdate),
+        ));
+        app.init_asset::<bevy::mesh::Mesh>();
+        app.init_resource::<MoverTraceExclusions>();
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(0.4, 3.0, 4.0),
+            Transform::from_xyz(2.0, 1.5, 0.0),
+        ));
+        app.finish();
+        app.cleanup();
+        app.update();
+
+        let (blocked, clear, free_position, blocked_position) = app
+            .world_mut()
+            .run_system_once(|collision: WorldCollision| {
+                (
+                    collision.capsule_segment_clear(Vec3::ZERO, Vec3::X * 4.0, 0.4, 0.8),
+                    collision.capsule_segment_clear(Vec3::ZERO, Vec3::Z * 4.0, 0.4, 0.8),
+                    collision.capsule_clear_at(Vec3::ZERO, 0.4, 0.8),
+                    collision.capsule_clear_at(Vec3::X * 1.5, 0.4, 0.8),
+                )
+            })
+            .expect("run_system_once");
+        assert_eq!(blocked, Some(false));
+        assert_eq!(clear, Some(true));
+        assert_eq!(free_position, Some(true));
+        assert_eq!(blocked_position, Some(false));
     }
 }
 

@@ -91,6 +91,7 @@ fn retire_failed_placements(placements: &mut Placements, asset_server: &AssetSer
             if let Some(path) = failed(id) {
                 warn!("placement model {path} failed to load: nothing spawned");
                 p.spawned = true;
+                p.failed = true;
                 *pending_spawns -= 1;
                 *spawn_epoch += 1;
             }
@@ -99,6 +100,7 @@ fn retire_failed_placements(placements: &mut Placements, asset_server: &AssetSer
             if let Some(path) = failed(d.handle.id().untyped()) {
                 warn!("WMO prop model {path} failed to load: nothing spawned");
                 d.spawned = true;
+                d.failed = true;
                 *pending_spawns -= 1;
             }
         }
@@ -1031,6 +1033,7 @@ fn resolve_wmo_doodads(
                 groups: wmo.doodad_groups.get(di).cloned().unwrap_or_default(),
                 light,
                 spawned: false,
+                failed: false,
                 sleeper: None,
             });
         }
@@ -1157,6 +1160,7 @@ mod retire_tests {
             transform: Transform::IDENTITY,
             entities: Vec::new(),
             spawned: false,
+            failed: false,
             doodad_set: 0,
             name_set: 0,
             doodads,
@@ -1175,6 +1179,7 @@ mod retire_tests {
             groups: Arc::from([]),
             light: PropLight::Exterior,
             spawned: false,
+            failed: false,
             sleeper: None,
         }
     }
