@@ -775,6 +775,7 @@ mod settling_under_black {
             total: 1,
             focus_resident: home,
             scene_ready: home,
+            pinned_collision_ready: true,
             ..Default::default()
         }
     }

@@ -98,8 +98,6 @@ pub struct TerrainStreamer {
     pin_request: std::collections::BTreeSet<(i32, i32)>,
     /// False until the current map's WDT has loaded; missing WDT data is never treated as clear.
     pins_resolved: bool,
-    /// Every pinned ADT, placement and associated collision build is available to body queries.
-    pins_collision_ready: bool,
     /// The window last streamed around, focus chunk and radii: an unchanged one skips the walk.
     window: Option<StreamWindow>,
     /// The map's WDT tile index: ADT requests wait for it and consult its `MAIN` grid.
@@ -177,12 +175,6 @@ impl TerrainStreamer {
                 .pinned_tiles
                 .iter()
                 .all(|tile| self.tiles.get(tile).is_some_and(|state| state.furnished))
-    }
-
-    /// Whether pinned terrain and its authored collision placements are available to queries.
-    /// Missing, pending or failed client data keeps this false instead of treating it as empty.
-    pub fn pins_collision_ready(&self) -> bool {
-        self.pins_collision_ready
     }
 }
 
@@ -497,7 +489,9 @@ impl Plugin for TerrainPlugin {
                     flush_hull_welds,
                     flush_static_merge,
                     sync_interior_volumes,
-                    update_pinned_collision_readiness,
+                    update_pinned_collision_readiness
+                        .after(rescatter_clutter)
+                        .after(scope_placement_art),
                 )
                     .chain()
                     .in_set(WorldStage::Stream)
@@ -616,7 +610,6 @@ fn stream_terrain(
         state.map_dir = Some(dir.clone());
         state.pinned_tiles.clear();
         state.pins_resolved = false;
-        state.pins_collision_ready = false;
         state.wdt = Some(asset_server.load(format!("mpq://World/Maps/{dir}/{dir}.wdt")));
         state.wdt_ungated = false;
     }
@@ -712,7 +705,6 @@ fn stream_terrain(
         // Missing WDT data is not evidence of clear terrain. Leave the pin readiness gate closed.
         state.pinned_tiles.clear();
         state.pins_resolved = false;
-        state.pins_collision_ready = false;
     }
 
     // A focus off the map's tile grid, usually one written in another map's coordinates, wants no
@@ -1024,12 +1016,12 @@ fn stream_terrain(
 
 /// Closes the camera-independent collision gate after terrain, placements and hull tasks settle.
 fn update_pinned_collision_readiness(
-    mut streamer: ResMut<TerrainStreamer>,
+    streamer: Res<TerrainStreamer>,
     placements: Res<Placements>,
     pending_colliders: Query<(), With<PendingCollider>>,
     mut progress: Option<ResMut<WorldLoadProgress>>,
 ) {
-    streamer.pins_collision_ready = streamer.pins_resolved
+    let pins_collision_ready = streamer.pins_resolved
         && streamer.pinned_tiles.iter().all(|tile_key| {
             let Some(tile) = streamer.tiles.get(tile_key).filter(|tile| tile.furnished) else {
                 return false;
@@ -1060,7 +1052,7 @@ fn update_pinned_collision_readiness(
             })
         });
     if let Some(progress) = progress.as_deref_mut() {
-        progress.pinned_collision_ready = streamer.pins_collision_ready;
+        progress.pinned_collision_ready = pins_collision_ready;
     }
 }
 
@@ -1177,7 +1169,6 @@ fn drop_streamed_world(
     state.pinned_tiles.clear();
     state.pin_request.clear();
     state.pins_resolved = false;
-    state.pins_collision_ready = false;
     state.window = None;
     state.reach = None;
     state.settled = false;
@@ -1622,14 +1613,12 @@ mod residency_tests {
         let mut system = IntoSystem::into_system(update_pinned_collision_readiness);
         system.initialize(&mut world);
         system.run((), &mut world).unwrap();
-        assert!(!world.resource::<TerrainStreamer>().pins_collision_ready());
         assert!(!world.resource::<WorldLoadProgress>().pinned_collision_ready);
 
         world
             .entity_mut(hull_entity)
             .remove::<collider::PendingCollider>();
         system.run((), &mut world).unwrap();
-        assert!(world.resource::<TerrainStreamer>().pins_collision_ready());
         assert!(world.resource::<WorldLoadProgress>().pinned_collision_ready);
 
         world
@@ -1639,7 +1628,7 @@ mod residency_tests {
             .unwrap()
             .failed = true;
         system.run((), &mut world).unwrap();
-        assert!(!world.resource::<TerrainStreamer>().pins_collision_ready());
+        assert!(!world.resource::<WorldLoadProgress>().pinned_collision_ready);
     }
 
     /// A frame with no placement spawned or released leaves the residency unwritten, even when

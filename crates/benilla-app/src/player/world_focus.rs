@@ -175,6 +175,7 @@ mod tests {
         app.insert_resource(Time::<()>::default())
             .insert_resource(WorldLoadProgress {
                 focus_tile: Some(own_tile()),
+                pinned_collision_ready: true,
                 ..WorldLoadProgress::default()
             })
             .insert_resource(Player {
