@@ -9,9 +9,6 @@ use crate::net::{RemoteMotion, Spline};
 /// Walk speed (yd/s) for a unit whose movement block has none; Run starts above 2×.
 pub(super) const DEFAULT_WALK_SPEED: f32 = 2.5;
 
-/// At or above this speed (yd/s) a unit plays Sprint (143) over Run.
-const FAST_RUN_SPEED: f32 = 11.0;
-
 /// Below this ground speed (yd/s) a streamed mover counts as standing still.
 const MOVING_EPSILON: f32 = 0.1;
 
@@ -27,9 +24,11 @@ pub(super) const SHUFFLE_RIGHT: u16 = 12;
 /// StealthWalk (119), gated with [`STEALTH_STAND`] on `UNIT_FIELD_BYTES_1` byte 3's CREEP bit,
 /// ahead of the whole speed tail and not rate-scaled. Translucency is the stealth aura's own kit
 /// (CharProc 14); this flag is only the pose.
+#[cfg(test)]
 pub(super) const STEALTH_WALK: u16 = 119;
 
 /// StealthStand (120), from the chain's last resolver, so every other one outranks it.
+#[cfg(test)]
 pub(super) const STEALTH_STAND: u16 = 120;
 
 /// Mount (91), the rider's seat whatever the unit does: the client arms it outside the selector;
@@ -120,6 +119,10 @@ pub(crate) mod move_flags {
 
     /// Any horizontal direction bit: the client's `[9e8] & 0xf` gate.
     pub const ANY_MOVE: u32 = FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT;
+    /// Committed movement mask used by standing-state and action-layer routing.
+    #[cfg(test)]
+    pub const ROUTE_COMMITTED_MOVE: u32 =
+        FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT | TURN_LEFT | TURN_RIGHT | SWIMMING;
 
     /// The low byte: forward, back, strafe, turn and pitch, the loot response's test.
     pub const STEERING: u32 = 0xff;
@@ -128,11 +131,6 @@ pub(crate) mod move_flags {
     /// kernel's moving set `0x987b50`): without one a mover keeps its last packet's pose. Swim,
     /// flight and the mode bits are not among them.
     pub const INTEGRATED: u32 = STEERING | FALLING | ASCENDING | DESCENDING;
-
-    /// The committed-lower-body test routing a one-shot to the masked overlay; the client's
-    /// separate mouse-turn test (`d58 & 0x1800`) reads a field benilla does not model.
-    pub const ROUTE_COMMITTED_MOVE: u32 =
-        FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT | TURN_LEFT | TURN_RIGHT | SWIMMING;
 
     /// The stationary-cast pin's moving test: no turn bits, so a caster turning in place keeps the
     /// pin, where [`ROUTE_COMMITTED_MOVE`]'s turn bits would flap it.
@@ -302,8 +300,7 @@ pub(super) fn gait_candidates(
     ready: Option<u16>,
     ranged_load: Option<u16>,
 ) -> &'static [u16] {
-    claimed_candidates(state, walk_speed, ready, ranged_load)
-        .unwrap_or_else(|| idle_fallback(state))
+    benilla_animation::gait_candidates(animation_facts(state, walk_speed), ready, ranged_load)
 }
 
 /// What the base picks: a fixed candidate list, or the unit's emote state's loop, Stand behind it.
@@ -332,26 +329,26 @@ pub(super) fn base_candidates(
     ranged_load: Option<u16>,
     state_anim: Option<u16>,
 ) -> BaseCands {
-    if let Some(c) = claimed_candidates(state, walk_speed, ready, ranged_load) {
-        return BaseCands::Fixed(c);
-    }
-    match state_anim {
-        Some(anim) => BaseCands::State([anim, STAND]),
-        None => BaseCands::Fixed(idle_fallback(state)),
+    match benilla_animation::base_candidates(
+        animation_facts(state, walk_speed),
+        ready,
+        ranged_load,
+        state_anim,
+    ) {
+        benilla_animation::BaseCandidates::Fixed(c) => BaseCands::Fixed(c),
+        benilla_animation::BaseCandidates::State(c) => BaseCands::State(c),
     }
 }
 
-/// The idle fallback, the chain's last resolver (`0x71e340`): the swim idle on `SWIMMING` or
-/// `FLYING`, else the prowl idle, else Hover (193) for a hovering body ([`hovering`]), else Stand.
-fn idle_fallback(state: &MovementState) -> &'static [u16] {
-    if state.flags & (move_flags::SWIMMING | move_flags::FLYING) != 0 {
-        &[41, 0]
-    } else if state.stealthed {
-        &[STEALTH_STAND, STAND]
-    } else if hovering(state) {
-        &[HOVER, STAND]
-    } else {
-        &[STAND]
+fn animation_facts(state: &MovementState, walk_speed: f32) -> benilla_animation::LocomotionFacts {
+    benilla_animation::LocomotionFacts {
+        speed: state.speed,
+        flags: state.flags,
+        walk_speed,
+        stand_state: state.stand_state,
+        stealthed: state.stealthed,
+        flying: state.flying,
+        physically_blocked: false,
     }
 }
 
@@ -367,11 +364,13 @@ pub(crate) fn is_special_idle_anim(
 }
 
 /// Hover (193), the idle of a body held off the ground.
+#[cfg(test)]
 pub(crate) const HOVER: u16 = 193;
 
 /// `0x71c6c0`: on a flying spline only `MOVEFLAG_HOVER` counts; otherwise gravity off
 /// ([`move_flags::LEVITATING`]) or `MOVEFLAG_HOVER` does. The spline's `0x2000` and the second flags
 /// word's `0x4` legs are not read here.
+#[cfg(test)]
 fn hovering(state: &MovementState) -> bool {
     let mask = if state.flying {
         move_flags::HOVER
@@ -379,100 +378,6 @@ fn hovering(state: &MovementState) -> bool {
         move_flags::LEVITATING | move_flags::HOVER
     };
     state.flags & mask != 0
-}
-
-/// The resolvers ahead of the state-emote resolver, `None` where none claims the base. The
-/// locomotion resolver runs on `[9e8] & 0xf` alone, so a stationary swimmer is not its: it falls
-/// through the standing resolvers to the swim idle in [`idle_fallback`].
-fn claimed_candidates(
-    state: &MovementState,
-    walk_speed: f32,
-    ready: Option<u16>,
-    ranged_load: Option<u16>,
-) -> Option<&'static [u16]> {
-    use move_flags::*;
-    let f = state.flags;
-    // A flyer is a swimmer to every arm here (`0x717050`); a flying mount's flight cycles sit in
-    // the swim slots.
-    let swimming = f & (SWIMMING | FLYING) != 0;
-    // Swimming locomotion: turn, then strafe, then backward, then forward.
-    if swimming && f & ANY_MOVE != 0 {
-        return Some(if f & (TURN_LEFT | TURN_RIGHT) != 0 {
-            &[41, 0]
-        } else if f & STRAFE_LEFT != 0 {
-            &[43, 42, 41, 0]
-        } else if f & STRAFE_RIGHT != 0 {
-            &[44, 42, 41, 0]
-        } else if f & BACKWARD != 0 {
-            &[45, 41, 0]
-        } else {
-            &[42, 41, 0]
-        });
-    }
-    // A flying spline, the taxi: Fly 135 ahead of backward and speed.
-    if state.flying {
-        return Some(&[135, 0]);
-    }
-    // Backward dominates strafe (`[9e8] & 2` → WalkBackwards 13).
-    if f & BACKWARD != 0 {
-        return Some(&[13, 4, 0]);
-    }
-    // Stealthed and moving, the prowl; Walk is row 119's AnimationData fallback.
-    if state.stealthed && f & ANY_MOVE != 0 {
-        return Some(&[STEALTH_WALK, 4, 0]);
-    }
-    // Ground gaits by live speed: Sprint at 11 and above, Run above twice walk, else Walk. Strafe
-    // takes these too: the reference has no ground strafe branch.
-    if f & ANY_MOVE != 0 {
-        let s = state.speed;
-        return Some(if s >= FAST_RUN_SPEED {
-            &[143, 5, 4, 0]
-        } else if s > 2.0 * walk_speed {
-            &[5, 4, 0]
-        } else {
-            &[4, 0]
-        });
-    }
-    // Turning in place: the shuffle (11 left, 12 right); the fidget gate refuses a swimmer.
-    if !swimming && f & TURN_LEFT != 0 {
-        return Some(&[SHUFFLE_LEFT, STAND]);
-    }
-    if !swimming && f & TURN_RIGHT != 0 {
-        return Some(&[SHUFFLE_RIGHT, STAND]);
-    }
-    // Standing and engaged: the Ready idle, gated on engagement, not the sheath; a swimmer's is the
-    // swim idle.
-    if let Some(r) = ready {
-        return Some(match r {
-            _ if swimming => &[41, 0],
-            26 => &[26, 25, 0],
-            27 => &[27, 25, 0],
-            28 => &[28, 25, 0],
-            _ => &[25, 0],
-        });
-    }
-    // Auto-repeat in the ranged stance, ahead of the chair loops.
-    if let Some(l) = ranged_load {
-        // A finished Load becomes its Hold through the completion dispatch; each Hold falls back to
-        // its Load, so a model without it holds full draw.
-        return Some(match l {
-            105 => &[105, 25, 0],
-            106 => &[106, 25, 0],
-            109 => &[109, 105, 25, 0],
-            110 => &[110, 106, 25, 0],
-            111 => &[111, 25, 0],
-            112 => &[112, 25, 0],
-            _ => &[25, 0],
-        });
-    }
-    // Standing: a chair loop (4/5/6); state 2 (`SIT_CHAIR`) writes no override in the reference
-    // (its row declines), so it falls through.
-    match state.stand_state {
-        4 => Some(&[102, 0]),
-        5 => Some(&[103, 0]),
-        6 => Some(&[104, 0]),
-        _ => None,
-    }
 }
 
 /// The local auto-repeat standing idle by the ranged item's subclass.
@@ -765,37 +670,18 @@ pub(super) fn route_mounted(id: u16) -> MountedRoute {
 
 /// The COMBAT set, the ids an airborne unit masks: every swing, no emote and no cast, so a
 /// jump-in-place cast replaces the hang full-body.
+#[cfg(test)]
 fn is_combat(id: u16) -> bool {
     matches!(id, 10 | 16..=24 | 30 | 36 | 57..=59 | 85..=88 | 95 | 117 | 118)
 }
-
-/// The ids forced full-body whatever the state: the Death class {1, 6, 131, 132} and the special
-/// attacks {57, 58, 118}.
-fn is_forced_full_body(id: u16) -> bool {
-    matches!(id, 1 | 6 | 131 | 132 | 57 | 58 | 118)
-}
-
-/// EmoteEat, the `/eat` and `/drink` loop.
-const EMOTE_EAT: u16 = 61;
 
 /// Route an unmounted one-shot by live state: masked while the lower body is committed (moving,
 /// turning, swimming, a non-zero stand state, or a COMBAT id airborne), else full-body, so one
 /// Attack1H is full-body standing and masked running.
 pub(super) fn route_oneshot(id: u16, flags: u32, stand_state: u8) -> OneShotRoute {
-    // EmoteEat (61) unmounted always takes the key bone, whatever the state.
-    if id == EMOTE_EAT {
-        return OneShotRoute::Masked;
-    }
-    if is_forced_full_body(id) || !is_class_a(id) {
-        return OneShotRoute::FullBody;
-    }
-    let committed_lower = flags & move_flags::ROUTE_COMMITTED_MOVE != 0
-        || stand_state != 0
-        || (is_combat(id) && flags & move_flags::FALLING != 0);
-    if committed_lower {
-        OneShotRoute::Masked
-    } else {
-        OneShotRoute::FullBody
+    match benilla_animation::route_one_shot(id, flags, stand_state) {
+        benilla_animation::PlaybackLayer::UpperBody => OneShotRoute::Masked,
+        benilla_animation::PlaybackLayer::FullBody => OneShotRoute::FullBody,
     }
 }
 
@@ -822,15 +708,14 @@ pub(super) fn gait_is_locomotion(state: &MovementState, walk_speed: f32) -> bool
 /// `OBJECT_FIELD_SCALE_X`, times a mount's display scale `+0x9c`), the mount's model when mounted;
 /// the spell-visual factor `+0x94` (`[0.75, 2.0]`) has no producer yet and must join here.
 pub(super) fn playback_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> f32 {
-    scaled_rate(clip, speed, model_scale).unwrap_or(1.0)
+    benilla_animation::locomotion_rate(clip, speed, model_scale).unwrap_or(1.0)
 }
 
 /// [`playback_rate`], `Some` only where both guards pass, so the per-frame write spares clips
 /// other producers own (the combat 2×, the whiff 0.5×, an airborne 0×). Only the scale takes
 /// `abs()`: `moveSpeed` is signed, and a backwards gait (-2.5) must stay at 1×.
 pub(super) fn scaled_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> Option<f32> {
-    let divisor = clip.move_speed * model_scale.abs();
-    (divisor > 0.0 && RATE_SCALED.contains(&clip.anim_id)).then(|| speed / divisor)
+    benilla_animation::locomotion_rate(clip, speed, model_scale)
 }
 
 /// The unified movement view, first present winning: the controller's [`MovementState`], a

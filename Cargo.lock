@@ -502,6 +502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "benilla-animation"
+version = "0.1.0"
+dependencies = [
+ "benilla-assets",
+ "benilla-formats",
+ "bevy",
+]
+
+[[package]]
 name = "benilla-app"
 version = "0.1.0"
 dependencies = [
@@ -509,6 +518,7 @@ dependencies = [
  "arboard",
  "assert_no_alloc",
  "avian3d",
+ "benilla-animation",
  "benilla-assets",
  "benilla-formats",
  "benilla-movement",

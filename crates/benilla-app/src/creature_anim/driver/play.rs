@@ -118,11 +118,7 @@ pub(super) fn apply_direction(
     dir: benilla_assets::ResolvedAnim,
     rate: f32,
 ) {
-    if dir.dir_flags != 0 {
-        if let Some(active) = player.animation_mut(c.node) {
-            dir.apply(active, rate, c.duration);
-        }
-    }
+    benilla_animation::apply_direction(player, c, dir, rate);
 }
 
 fn arm(
@@ -133,9 +129,7 @@ fn arm(
     rate: f32,
     blend: Duration,
 ) {
-    let active = tr.play(player, c.node, blend);
-    active.set_repeat(repeat);
-    active.set_speed(rate);
+    benilla_animation::play_clip_with_blend(tr, player, c, repeat, rate, blend);
 }
 
 /// A one-shot arm's rolls in op4's order: the variation, then the picked clip's replay budget `R`,
@@ -145,31 +139,7 @@ pub(super) fn roll_oneshot<'a>(
     head: &'a AnimClip,
     rng: &mut benilla_assets::AnimRng,
 ) -> (&'a AnimClip, RepeatAnimation) {
-    let c = anims
-        .pick_variation(head.anim_id, rng.draw())
-        .unwrap_or(head);
-    let repeat = match rng.replay_count(c.replay) {
-        r if r > 1 => RepeatAnimation::Count(r),
-        _ => RepeatAnimation::Never,
-    };
-    (c, repeat)
-}
-
-/// A looping arm's variation (`variationIdx = −1`): relaxed, the weighted walk (the idle fidget);
-/// combat or cast, the head. Only the watchdog's re-arm re-rolls, never the kernel.
-pub(super) fn pick_loop_variation<'a>(
-    anims: &'a ModelAnimations,
-    head: &'a AnimClip,
-    relaxed: bool,
-    rng: &mut benilla_assets::AnimRng,
-) -> &'a AnimClip {
-    if relaxed {
-        anims
-            .pick_variation(head.anim_id, rng.draw())
-            .unwrap_or(head)
-    } else {
-        head
-    }
+    benilla_animation::roll_one_shot(anims, head, rng)
 }
 
 /// A looping arm's rolls in op4's order; the budget `R ∈ [min, max−1]`, floored to 1, sets the
@@ -180,9 +150,7 @@ pub(super) fn roll_loop<'a>(
     relaxed: bool,
     rng: &mut benilla_assets::AnimRng,
 ) -> (&'a AnimClip, u32) {
-    let c = pick_loop_variation(anims, head, relaxed, rng);
-    let r = rng.replay_count(c.replay);
-    (c, r)
+    benilla_animation::roll_loop(anims, head, relaxed, rng)
 }
 
 /// Resolves `id` through the model's baked fallback and cross-fades into it with its rolls; a loop

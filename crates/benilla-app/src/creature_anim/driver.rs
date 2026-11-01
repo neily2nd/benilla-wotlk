@@ -220,12 +220,13 @@ fn transplant_up(
     else {
         return false;
     };
-    let active = player.play(upper);
-    active.replay();
-    active.set_repeat(bevy::animation::RepeatAnimation::Never);
-    active.seek_to(seek);
-    active.set_speed(speed);
-    active.set_weight(ONESHOT_OVERLAY_WEIGHT); // `blendFlag = 0`: no cross-fade
+    benilla_animation::play_upper_body_overlay(
+        player,
+        upper,
+        seek,
+        speed,
+        ONESHOT_OVERLAY_WEIGHT, // `blendFlag = 0`: no cross-fade
+    );
     drv.overlay = Some(Overlay {
         node: upper,
         id,
