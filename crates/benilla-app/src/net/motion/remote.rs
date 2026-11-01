@@ -430,6 +430,9 @@ pub(in crate::net) fn extrapolate_remote_units(
                         water,
                         steep: false,
                         step_start: None,
+                        capsule_radius: crate::player::CAPSULE_RADIUS,
+                        capsule_height: crate::player::CAPSULE_HEIGHT,
+                        skin_width: benilla_movement::SKIN_WIDTH,
                     },
                 );
                 // No floor found: a remote has no fall election, so keep the packet's height and

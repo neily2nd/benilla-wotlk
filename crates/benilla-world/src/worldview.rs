@@ -52,6 +52,13 @@ const FOVY: f32 = 1.221_730_5;
 
 /// Builds and runs the world viewer; `build` is the launcher shim's compile-time git stamp.
 pub fn run(build: BuildId) -> AppExit {
+    run_with(build, |_| {})
+}
+
+/// Builds the same world viewer with a focused offline consumer installed before the default
+/// camera. Used by isolated world-data harnesses; the viewer continues to own asset and stream
+/// initialization.
+pub fn run_with(build: BuildId, extend: impl FnOnce(&mut App)) -> AppExit {
     // The install resolves from the launcher's folder when its stamp names one, as the client's
     // does; this shim has no `dev` feature, so it stamps none and the viewer keeps benilla's.
     benilla_formats::set_project_folder(build.project_dir);
@@ -127,6 +134,7 @@ pub fn run(build: BuildId) -> AppExit {
     app.add_plugins(crate::world_plugins::WorldPlugins);
     stubs(&mut app);
 
+    extend(&mut app);
     app.add_plugins(plugin);
 
     // After `AssetPlugin`: the loaders go into the live `AssetServer`, as in the client.

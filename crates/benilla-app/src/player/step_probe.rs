@@ -162,6 +162,7 @@ pub(super) fn watch(
                 adv.max(wanted),
                 adv,
                 STEP_UP_HEIGHT,
+                CAPSULE_HEIGHT,
             )
             .verdict;
             // `fwd`, the raised sweep's reach, tells a steep floor from a stop at head height.

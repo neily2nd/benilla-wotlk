@@ -20,9 +20,6 @@ pub(super) const TURN_RATE: f32 = std::f32::consts::PI;
 /// the pitch-key integrator, whose keys are unbound by default.
 pub(super) const MOUSELOOK_PITCH_CLAMP: f32 = 1.553_343;
 
-/// Water walking sees the water only while the mover pitch is strictly above −37°; aiming lower
-/// sinks a water-walker in.
-pub(super) const WATER_WALK_PITCH_FLOOR: f32 = -0.645_771_8;
 /// Turn-rate scale while translating or falling (`flags & 0x200f`).
 pub(super) const TURN_RATE_MOVING: f32 = 0.75;
 
@@ -34,83 +31,54 @@ pub(super) const STATIONARY_CHASE_RATE: f32 = 8.0;
 
 /// Capsule radius (yd), the movement constructor's placeholder 1/3. The reference overwrites it per
 /// model from `CreatureModelData` (female 0.20835); not built here.
-pub(crate) const CAPSULE_RADIUS: f32 = 1.0 / 3.0;
+pub(crate) const CAPSULE_RADIUS: f32 = benilla_movement::CAPSULE_RADIUS;
 /// Capsule total height (yd), one for every body: the swept shape and the head and feet offsets.
 /// Numerically [`DEFAULT_COLLISION_HEIGHT`], but a unit's depth lines use its per-model
 /// [`crate::entities::CollisionHeight`] instead.
-pub(crate) const CAPSULE_HEIGHT: f32 = 2.027_777_7;
+pub(crate) const CAPSULE_HEIGHT: f32 = benilla_movement::CAPSULE_HEIGHT;
 
 /// The movement constructor's collision height, before the reference sets the model's: the depth
 /// lines' fallback for a unit whose display id has no `CreatureModelData` row.
 pub(crate) const DEFAULT_COLLISION_HEIGHT: f32 = 2.027_777_7;
 /// Gravity (yd/s²), the reference's and vmangos's `Movement::gravity`; also avian's `Gravity`, and
 /// [`crate::net`] replays relayed jump arcs under it so an observer's arc matches the mover's.
-pub(crate) const GRAVITY: f32 = 19.291_105;
-/// Jump take-off speed (yd/s), the reference's.
-pub(super) const JUMP_SPEED: f32 = 7.955_547;
+pub(crate) const GRAVITY: f32 = benilla_movement::GRAVITY;
 /// Terminal fall speed (yd/s), and vmangos's `terminalVelocity`; [`crate::net`]'s arc replay caps
 /// at it too.
-pub(crate) const TERMINAL_VELOCITY: f32 = 60.148_003;
+pub(crate) const TERMINAL_VELOCITY: f32 = benilla_movement::TERMINAL_VELOCITY;
 /// Terminal fall speed under feather fall (yd/s), the whole of Slow Fall: the reference's two fall
 /// integrators pick it over [`TERMINAL_VELOCITY`] while `MOVEFLAG_SAFE_FALL` is set (vmangos's
 /// `terminalSavefallVelocity`).
-pub(crate) const FEATHER_TERMINAL_VELOCITY: f32 = 7.0;
+pub(crate) const FEATHER_TERMINAL_VELOCITY: f32 = benilla_movement::FEATHER_TERMINAL_VELOCITY;
 /// Hover's clearance (yd), the whole of Hover: the walk resolver probes further down and writes the
 /// body's z a yard clear of the floor.
-pub(crate) const HOVER_HEIGHT: f32 = 1.0;
-/// Hover's rise rate (yd/s): the snap only lowers the body, so the rise is a separate rate-limited
-/// pass's, the feather-fall 7.0.
-pub(crate) const HOVER_CLIMB_RATE: f32 = 7.0;
+pub(crate) const HOVER_HEIGHT: f32 = benilla_movement::HOVER_HEIGHT;
 /// Walkable iff the surface normal is within 50° of up, the reference's limit; steeper slides back.
-pub(super) const GROUND_COS: f32 = 0.642_788;
+pub(super) const GROUND_COS: f32 = benilla_movement::GROUND_COS;
 /// Downward probe distance (yd) to decide whether we're standing on ground.
-pub(super) const GROUND_PROBE: f32 = 0.2;
+pub(super) const GROUND_PROBE: f32 = benilla_movement::GROUND_PROBE;
 /// The snap's slope ratio (atan ≈ 61.6°): the reference's step-vs-fall election probes `travel ·
 /// ratio + slack` below the moved body, plus the rise budget `H` only on a steep support
 /// (`0x4000000`). The foot cone's waist shares it.
-pub(super) const STEP_SLOPE_RATIO: f32 = 1.849_399;
-/// The snap reach's fixed slack (yd), 1/36.
-pub(super) const STEP_SNAP_SLACK: f32 = 0.027_777_8;
+pub(super) const STEP_SLOPE_RATIO: f32 = benilla_movement::STEP_SLOPE_RATIO;
 /// The step-up rise ceiling (yd), the reference's `H`: its step-up height returns the movement
 /// block's `+0xb8`, the ratio `max(SCALE_X / CreatureModelScale, 1)`, which is 1.0 for the local
 /// player.
-pub(crate) const STEP_UP_HEIGHT: f32 = 1.0;
+pub(crate) const STEP_UP_HEIGHT: f32 = benilla_movement::STEP_UP_HEIGHT;
 /// The rise ceiling of a body the reference does not treat as player-controlled, the reference's
 /// false leg: a creature, a pet, or a charmed, possessed, feared, confused or rooted player.
 pub(crate) const CREATURE_STEP_UP_HEIGHT: f32 = 2.0;
-/// The step-up certify advance (yd), a floor under the frame's travel: the reference steps
-/// `max(H·tan50°, radius + 1/720)` into the face, 1.1918 yd at `H` = 1.0. The raised forward sweep
-/// is clipped by anything in the way, so the advance reaches only clear air.
-pub(super) const STEP_UP_ADVANCE: f32 = 1.191_753_6;
-/// The certify reach per yard of rise budget, `tan 50°`; a creature's 2.0 reaches 2.38 yd.
-pub(super) const STEP_UP_ADVANCE_PER_YARD: f32 = STEP_UP_ADVANCE / STEP_UP_HEIGHT;
-/// The foot cone's height (yd). The reference's solid is a box over a cone whose bevels rise
-/// `radius ·` from a point at the foot, so an edge below this is ridden up the 61.6° skirt and one
-/// above meets the box and takes the step-up. With the placeholder [`CAPSULE_RADIUS`] ours is 0.616
-/// yd; a live human male's is 0.565, female's 0.385.
-pub(super) const FOOT_CONE_HEIGHT: f32 = CAPSULE_RADIUS * STEP_SLOPE_RATIO;
-/// The landing probe (yd): airborne, walk mode resumes only this close to the floor, so the arc
-/// ends where the slide contacts rather than [`GROUND_PROBE`] early.
-pub(super) const LAND_PROBE: f32 = 0.05;
-/// Stalled airborne frames (see [`WEDGE_STALL_RATIO`]) that count as resting wedged between two
-/// steep faces: the fall ends there, and nothing becomes walkable by it.
-pub(super) const WEDGE_STILL_FRAMES: u8 = 3;
-/// A frame stalls when its descent is under this fraction of gravity's intended `vel_y·dt` while
-/// falling faster than [`WEDGE_MIN_FALL`]: free fall achieves ~100%, a steep slide at least 75%.
-pub(super) const WEDGE_STALL_RATIO: f32 = 0.15;
-/// Fall speed (yd/s) before stalled frames count: a jump apex never qualifies, a wedge soon does.
-pub(super) const WEDGE_MIN_FALL: f32 = 1.0;
 /// The one-shot air nudge (yd/s) a standstill jump may steer by. The reference's is the live
 /// `min(walk, run)`; this is the default walk speed, not the live one.
-pub(super) const AIR_NUDGE_SPEED: f32 = 2.5;
+pub(super) const AIR_NUDGE_SPEED: f32 = benilla_movement::AIR_NUDGE_SPEED;
 /// The FALLINGFAR distance leg (yd): a jump arc (launch vz ≠ 0) latches it once this far below its
 /// launch height, and the anim swaps to Fall(40); a flat jump never does.
-pub(super) const FALL_FAR_DROP: f32 = 0.111_11;
+pub(super) const FALL_FAR_DROP: f32 = benilla_movement::FALL_FAR_DROP;
 /// The FALLINGFAR timer leg (s): a step-off fall (launch vz = 0) latches it after 500 ms airborne
 /// (`0x1f4`), about 2.41 yd of free fall from rest.
-pub(super) const FALL_FAR_TIME: f32 = 0.5;
+pub(super) const FALL_FAR_TIME: f32 = benilla_movement::FALL_FAR_TIME;
 /// Skin width (yd) kept between the capsule and geometry on casts.
-pub(super) const SKIN_WIDTH: f32 = 0.02;
+pub(super) const SKIN_WIDTH: f32 = benilla_movement::SKIN_WIDTH;
 
 /// Seconds of stalled streaming before the post-snap hold gives up: the streamer pushes the
 /// deadline on while the world is stale or any load counter moves, so only a dead stream hits it.
@@ -403,7 +371,7 @@ pub(crate) struct Player {
     /// At rest wedged between steep faces: standing while a close down-probe still finds support,
     /// until real ground, a jump or walking off into open air.
     pub(super) wedged: bool,
-    /// Consecutive stalled airborne frames (see [`WEDGE_STALL_RATIO`]).
+    /// Consecutive stalled airborne frames (see [`benilla_movement::WEDGE_STALL_RATIO`]).
     pub(super) wedge_still: u8,
     /// On a certified steep contact rather than a walkable floor, the reference's `0x4000000`:
     /// riding a low edge's foot cone up, or following a surface down off a ledge. Counts as
@@ -422,7 +390,7 @@ pub(crate) struct Player {
     /// site with the jump and the hover launch.
     pub(super) knockback: Option<PendingKnockback>,
     /// The arc's take-off vertical speed (yd/s, WoW +Z up), the client's fall-start argument
-    /// (`+0xa0`) and the jump tail's `zspeed`: [`JUMP_SPEED`] for a jump, exactly 0 for a step-off.
+    /// (`+0xa0`) and the jump tail's `zspeed`: [`benilla_movement::JUMP_SPEED`] for a jump, exactly 0 for a step-off.
     pub(super) jump_zspeed: f32,
     /// The launch vertical speed, recorded before this frame's gravity: [`Self::jump_zspeed`] is
     /// seeded from this, since `vel_y` is already a step down the arc when [`super::arc`] runs.
@@ -890,7 +858,7 @@ mod autorun_tests {
 mod move_mode_tests {
     use super::{
         incapacitated_flags, view_is_out, MoveModes, MoverInput, Player, FEATHER_TERMINAL_VELOCITY,
-        GRAVITY, HOVER_CLIMB_RATE, HOVER_HEIGHT, TERMINAL_VELOCITY,
+        GRAVITY, HOVER_HEIGHT, TERMINAL_VELOCITY,
     };
     use crate::creature_anim::move_flags as f;
     use benilla_protocol::MoveMode;
@@ -1027,12 +995,12 @@ mod move_mode_tests {
 
     #[test]
     fn hover_climbs_to_its_clearance_rather_than_popping() {
-        assert_eq!(HOVER_CLIMB_RATE, 7.0); //,
+        assert_eq!(benilla_movement::HOVER_CLIMB_RATE, 7.0); //,
         let dt = 1.0 / 60.0;
         let mut clearance = 0.0_f32;
         let mut frames = 0;
         while clearance < HOVER_HEIGHT {
-            clearance = (clearance + HOVER_CLIMB_RATE * dt).min(HOVER_HEIGHT);
+            clearance = (clearance + benilla_movement::HOVER_CLIMB_RATE * dt).min(HOVER_HEIGHT);
             frames += 1;
         }
         assert!(
@@ -1040,7 +1008,7 @@ mod move_mode_tests {
             "a snap would arrive in one frame; this must not"
         );
         assert!(
-            (frames as f32 * dt - HOVER_HEIGHT / HOVER_CLIMB_RATE).abs() < 0.02,
+            (frames as f32 * dt - HOVER_HEIGHT / benilla_movement::HOVER_CLIMB_RATE).abs() < 0.02,
             "climbed in {frames} frames, expected ≈0.143 s"
         );
     }

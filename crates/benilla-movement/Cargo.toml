@@ -1,0 +1,18 @@
+[package]
+name = "benilla-movement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable collision-backed kinematic movement for Benilla"
+
+[lints]
+workspace = true
+
+[dependencies]
+avian3d = "0.6"
+bevy.workspace = true
+benilla-world = { path = "../benilla-world", default-features = false }
+
+[dev-dependencies]
+benilla-assets = { path = "../benilla-assets", default-features = false }
+benilla-protocol = { path = "../benilla-protocol" }

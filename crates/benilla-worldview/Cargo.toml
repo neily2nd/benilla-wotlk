@@ -10,7 +10,12 @@ workspace = true
 
 [dependencies]
 # Only the engine, never a game crate: a world concept that needs the game fails to build here.
+anyhow.workspace = true
+avian3d = "0.6"
+benilla-assets = { path = "../benilla-assets" }
+benilla-movement = { path = "../benilla-movement" }
 benilla-world = { path = "../benilla-world" }
+bevy.workspace = true
 
 [build-dependencies]
 benilla-buildstamp = { path = "../benilla-buildstamp" }
@@ -20,3 +25,16 @@ name = "benilla-worldview"
 path = "src/main.rs"
 # Test-building this bin would relink it on every commit, since the build stamp changes.
 test = false
+
+[[bin]]
+name = "elw-movement-equivalence"
+path = "src/bin/elw_movement_equivalence.rs"
+test = false
+
+[[bin]]
+name = "elw-014b1c-grounded-equivalence"
+path = "src/bin/elw_014b1c_grounded_equivalence.rs"
+test = false
+
+[dev-dependencies]
+benilla-protocol = { path = "../benilla-protocol" }

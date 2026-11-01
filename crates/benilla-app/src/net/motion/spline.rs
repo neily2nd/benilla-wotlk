@@ -790,6 +790,9 @@ fn clamp_unit(
                 // miss on a steep face.
                 steep: false,
                 step_start: None,
+                capsule_radius: crate::player::CAPSULE_RADIUS,
+                capsule_height: crate::player::CAPSULE_HEIGHT,
+                skin_width: benilla_movement::SKIN_WIDTH,
             },
         );
         // A sweep that finds no floor holds the server's pose, as `grounded_y` does: the step's

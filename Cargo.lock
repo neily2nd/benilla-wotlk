@@ -511,6 +511,7 @@ dependencies = [
  "avian3d",
  "benilla-assets",
  "benilla-formats",
+ "benilla-movement",
  "benilla-protocol",
  "benilla-srp",
  "benilla-ui",
@@ -610,6 +611,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "benilla-movement"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "benilla-assets",
+ "benilla-protocol",
+ "benilla-world",
+ "bevy",
+]
+
+[[package]]
 name = "benilla-mpq"
 version = "0.1.0"
 dependencies = [
@@ -690,8 +702,14 @@ dependencies = [
 name = "benilla-worldview"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "avian3d",
+ "benilla-assets",
  "benilla-buildstamp",
+ "benilla-movement",
+ "benilla-protocol",
  "benilla-world",
+ "bevy",
 ]
 
 [[package]]
