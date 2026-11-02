@@ -5,6 +5,62 @@
 
 use bevy::prelude::{ButtonInput, KeyCode, MouseButton, Quat, Vec3};
 
+mod controller;
+pub use controller::{
+    Controller, ControllerConfig, ControllerFrame, ControllerInput, FIXED_STEP_SECONDS,
+};
+
+impl ControlInput {
+    pub fn moving(self) -> bool {
+        self.forward != 0.0 || self.strafe != 0.0
+    }
+
+    pub fn movement_flags(self) -> u32 {
+        use benilla_animation::movement_flags as f;
+        let mut flags = 0;
+        if self.forward > 0.0 {
+            flags |= f::FORWARD;
+        }
+        if self.forward < 0.0 {
+            flags |= f::BACKWARD;
+        }
+        if self.strafe < 0.0 {
+            flags |= f::STRAFE_LEFT;
+        }
+        if self.strafe > 0.0 {
+            flags |= f::STRAFE_RIGHT;
+        }
+        flags
+    }
+}
+
+/// The POC's speed policy, scaled by an application's effective forward run speed.
+pub fn movement_speed(run_speed: f32, input: ControlInput) -> f32 {
+    run_speed.max(0.0)
+        * if input.walking {
+            2.5 / 7.0
+        } else if input.forward < 0.0 {
+            4.5 / 7.0
+        } else {
+            1.0
+        }
+}
+
+/// Benilla's keyboard yaw step. Mouse look commits absolute camera facing instead.
+pub fn keyboard_turn_delta(input: ControlInput, dt: f32, turn_rate: f32, airborne: bool) -> f32 {
+    if input.mouse_look || !dt.is_finite() || dt <= 0.0 || !turn_rate.is_finite() {
+        return 0.0;
+    }
+    input.turn
+        * turn_rate.max(0.0)
+        * dt
+        * if input.moving() || airborne {
+            0.75
+        } else {
+            1.0
+        }
+}
+
 /// Configurable key bindings, separated from the movement semantics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlBindings {
@@ -54,9 +110,17 @@ pub fn decode_input(
     buttons: &ButtonInput<MouseButton>,
     bindings: ControlBindings,
 ) -> ControlInput {
+    decode_input_with_mouse_look(keys, bindings, buttons.pressed(bindings.mouse_look))
+}
+
+/// Decode after the application's cursor/focus/UI policy has accepted or rejected mouse look.
+pub fn decode_input_with_mouse_look(
+    keys: &ButtonInput<KeyCode>,
+    bindings: ControlBindings,
+    mouse_look: bool,
+) -> ControlInput {
     let axis =
         |positive, negative| f32::from(keys.pressed(positive)) - f32::from(keys.pressed(negative));
-    let mouse_look = buttons.pressed(bindings.mouse_look);
     ControlInput {
         forward: axis(bindings.forward, bindings.backward),
         strafe: axis(bindings.strafe_right, bindings.strafe_left),
@@ -127,9 +191,15 @@ pub fn advance_heading(
         return move_flags;
     }
 
-    let turn = if input.mouse_look { 0.0 } else { input.turn };
-    let rate = turn_rate.max(0.0) * if moving || airborne { 0.75 } else { 1.0 };
-    let turn_step = turn * rate * dt;
+    let turn_step = keyboard_turn_delta(
+        ControlInput {
+            forward: if moving { 1.0 } else { 0.0 },
+            ..input
+        },
+        dt,
+        turn_rate,
+        airborne,
+    );
     // Benilla stores the accumulated facing unwrapped; only comparisons and rendered body yaw fold.
     heading.facing += turn_step;
 
@@ -211,6 +281,56 @@ pub fn locomotion_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opposite_inputs_cancel_and_rejected_mouse_capture_does_not_suppress_arrow_turn() {
+        let mut keys = ButtonInput::default();
+        for key in [
+            KeyCode::KeyW,
+            KeyCode::KeyS,
+            KeyCode::KeyA,
+            KeyCode::KeyD,
+            KeyCode::ArrowLeft,
+        ] {
+            keys.press(key);
+        }
+        let input = decode_input_with_mouse_look(&keys, Default::default(), false);
+        assert!(!input.moving());
+        assert_eq!(input.turn, 1.0);
+        assert_eq!(input.movement_flags(), 0);
+        assert_eq!(
+            decode_input_with_mouse_look(&keys, Default::default(), true).turn,
+            0.0
+        );
+    }
+
+    #[test]
+    fn walk_run_and_backward_speed_share_the_proven_poc_policy() {
+        assert_eq!(movement_speed(7.0, ControlInput::default()), 7.0);
+        assert_eq!(
+            movement_speed(
+                7.0,
+                ControlInput {
+                    forward: -1.0,
+                    ..Default::default()
+                }
+            ),
+            4.5
+        );
+        for forward in [-1.0, 0.0, 1.0] {
+            assert_eq!(
+                movement_speed(
+                    7.0,
+                    ControlInput {
+                        forward,
+                        walking: true,
+                        ..Default::default()
+                    }
+                ),
+                2.5
+            );
+        }
+    }
 
     #[test]
     fn requested_default_bindings_strafe_and_turn_independently() {

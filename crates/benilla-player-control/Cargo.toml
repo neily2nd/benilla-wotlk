@@ -11,3 +11,5 @@ workspace = true
 [dependencies]
 bevy.workspace = true
 benilla-animation = { path = "../benilla-animation" }
+benilla-movement = { path = "../benilla-movement" }
+benilla-world = { path = "../benilla-world", default-features = false }

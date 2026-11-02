@@ -15,13 +15,11 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use super::{
     gait, mover, CameraControl, Player, PlayerCapsule, CAPSULE_HEIGHT, CAPSULE_RADIUS, TURN_RATE,
-    TURN_RATE_MOVING,
 };
 
 const GOLDSHIRE_START: [f32; 3] = [-9458.89, 58.385, 104.918];
 const RUN_SPEED: f32 = 7.0;
 const WALK_SPEED: f32 = 2.5;
-const RUN_BACK_SPEED: f32 = 4.5;
 const MAX_FRAME_HISTORY: usize = 600;
 
 #[derive(Component)]
@@ -177,13 +175,12 @@ fn drive_offline_player(
     let moving = input.forward != 0.0 || input.strafe != 0.0;
     let turn_rate = TURN_RATE;
     if input.turn != 0.0 && !input.mouse_look {
-        let rate = turn_rate
-            * if moving || player.airborne_since.is_some() {
-                TURN_RATE_MOVING
-            } else {
-                1.0
-            };
-        player.face_yaw += input.turn * rate * delta;
+        player.face_yaw += benilla_player_control::keyboard_turn_delta(
+            input,
+            delta,
+            turn_rate,
+            player.airborne_since.is_some(),
+        );
         camera.yaw = player.face_yaw;
     }
 
@@ -261,13 +258,7 @@ fn drive_offline_player(
 }
 
 fn movement_speed(input: ControlInput) -> f32 {
-    if input.walking {
-        WALK_SPEED
-    } else if input.forward < 0.0 {
-        RUN_BACK_SPEED
-    } else {
-        RUN_SPEED
-    }
+    benilla_player_control::movement_speed(RUN_SPEED, input)
 }
 
 fn update_offline_camera(
@@ -471,7 +462,7 @@ mod tests {
                 forward: -1.0,
                 ..Default::default()
             }),
-            RUN_BACK_SPEED
+            4.5
         );
     }
 }

@@ -647,6 +647,8 @@ name = "benilla-player-control"
 version = "0.1.0"
 dependencies = [
  "benilla-animation",
+ "benilla-movement",
+ "benilla-world",
  "bevy",
 ]
 
