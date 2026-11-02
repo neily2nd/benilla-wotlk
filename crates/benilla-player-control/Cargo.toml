@@ -1,0 +1,13 @@
+[package]
+name = "benilla-player-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable, offline-capable Warcraft player input, heading and locomotion control"
+
+[lints]
+workspace = true
+
+[dependencies]
+bevy.workspace = true
+benilla-animation = { path = "../benilla-animation" }

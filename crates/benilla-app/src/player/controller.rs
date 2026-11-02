@@ -321,8 +321,6 @@ pub(super) fn control(
             .map(|(g, m)| (g.0, m.map_or(0, |m| m.0))),
     );
 
-    let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
-
     // On a transport, recompose the rider from the deck's pose this frame, before input integrates.
     ride::carry(&mut player, &mut cam, transports);
 
@@ -443,22 +441,24 @@ pub(super) fn control(
             player.face_yaw += drunk_wobble;
             turn_delta = drunk_wobble;
         }
-        let face_rot = Quat::from_rotation_y(player.face_yaw);
-        let move_fwd = flat(face_rot * Vec3::NEG_Z);
-        let move_right = flat(face_rot * Vec3::X);
-        let mut dir = Vec3::ZERO;
         // One step in the net axis's sign, as the emitter issues one START in `sign(axis)`.
-        match fwd_axis.signum() {
-            1 => dir += move_fwd,
-            -1 => dir -= move_fwd,
-            _ => {}
-        }
-        // Strafe likewise; a cancelled pair is no strafe.
-        match side_axis.signum() {
-            1 => dir += move_right,
-            -1 => dir -= move_right,
-            _ => {}
-        }
+        let move_fwd = benilla_player_control::movement_direction(
+            player.face_yaw,
+            benilla_player_control::ControlInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        );
+        let move_right = benilla_player_control::movement_direction(
+            player.face_yaw,
+            benilla_player_control::ControlInput {
+                strafe: 1.0,
+                ..Default::default()
+            },
+        );
+        let mut dir = (move_fwd * fwd_axis.signum() as f32
+            + move_right * side_axis.signum() as f32)
+            .normalize_or_zero();
         // Translation dies here, but a root leaves turning live: the reference's allow-list permits
         // the turn, pitch, run/walk and SetFacing commands. A stun, which vmangos applies with a
         // root (`SpellAuras.cpp:3502`), or death stops the turn as well.

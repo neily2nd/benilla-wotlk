@@ -522,6 +522,7 @@ dependencies = [
  "benilla-assets",
  "benilla-formats",
  "benilla-movement",
+ "benilla-player-control",
  "benilla-protocol",
  "benilla-srp",
  "benilla-ui",
@@ -639,6 +640,14 @@ dependencies = [
  "bzip2",
  "flate2",
  "zlib-rs",
+]
+
+[[package]]
+name = "benilla-player-control"
+version = "0.1.0"
+dependencies = [
+ "benilla-animation",
+ "bevy",
 ]
 
 [[package]]

@@ -51,6 +51,8 @@ mod input;
 pub(crate) mod land;
 mod move_trace;
 mod movement_net;
+#[cfg(feature = "offline-poc")]
+pub(crate) mod offline;
 mod posture;
 // `pub(crate)`: a remote mover's dead-reckon (`crate::net::motion::remote`) steps through the same
 // walk resolve, as the reference runs every mover through one controller.

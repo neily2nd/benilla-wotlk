@@ -615,6 +615,38 @@ fn publish_world_units(
 /// Loads the display catalogs at startup and each frame gives every net entity its visual.
 pub(crate) struct EntitiesPlugin;
 
+/// The isolated world-view POC needs the existing catalog, display builder and attachment path,
+/// but none of the session-owned equipment, spell, preview or missile systems.
+#[cfg(feature = "offline-poc")]
+pub(crate) struct OfflineEntitiesPlugin;
+
+#[cfg(feature = "offline-poc")]
+impl Plugin for OfflineEntitiesPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<SkinComposites>()
+            .init_resource::<attach::MergedFormsCache>()
+            .init_resource::<corpse::BonesModels>()
+            .add_systems(Startup, setup_entities.after(AssetSet::Open))
+            .add_systems(
+                Update,
+                (stamp_model_scales, stamp_collision_heights)
+                    .chain()
+                    .after(WorldStage::Net)
+                    .before(EntityVisualsSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_display_models.in_set(DisplayBuildSet),
+                    attach_entity_visuals,
+                )
+                    .chain()
+                    .in_set(EntityVisualsSet)
+                    .after(WorldStage::Net),
+            );
+    }
+}
+
 impl Plugin for EntitiesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<mount::MountDropped>();

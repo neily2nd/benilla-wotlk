@@ -2,9 +2,9 @@
 //! [`super::control`] calls [`drive_body_heading`] once per controlled frame, after the move flags
 //! are final.
 
-use crate::creature_anim::{ease_strafe_yaw, move_flags, strafe_body_offset, wrap_pi};
+use benilla_player_control::{advance_heading, ControlInput, Heading};
 
-use super::{Player, STATIONARY_CHASE_RATE};
+use super::Player;
 
 /// Advances `model_yaw` one frame and returns the animation's view of the move flags (the wire
 /// keeps the real key flags). Strafing eases the body toward `face_yaw ± 90°` (`± 45°` diagonal,
@@ -25,37 +25,24 @@ pub(super) fn drive_body_heading(
     // The mover's own turn rate in rad/s: a possessed creature settles at its own pace.
     turn_rate: f32,
 ) -> u32 {
-    let strafe_offset = if swimming {
-        0.0
-    } else {
-        strafe_body_offset(move_flags_now)
+    let mut heading = Heading {
+        facing: player.face_yaw,
+        body: player.model_yaw,
     };
-    let mut body_turn_step = 0.0_f32;
-    if swimming {
-        player.model_yaw = player.face_yaw;
-    } else if strafe_offset != 0.0 {
-        player.model_yaw = ease_strafe_yaw(player.model_yaw, player.face_yaw, strafe_offset, dt);
-    } else if moving || airborne {
-        player.model_yaw = player.face_yaw;
-    } else {
-        let delta = wrap_pi(player.face_yaw - player.model_yaw);
-        let mut step = (delta.abs() - std::f32::consts::FRAC_PI_2).max(0.0); // the ceiling
-        if !steering {
-            step += dt * turn_rate * STATIONARY_CHASE_RATE; // the release sweep
-        }
-        body_turn_step = step.min(delta.abs()).copysign(delta);
-        player.model_yaw = wrap_pi(player.model_yaw + body_turn_step);
-    }
-
-    let mut anim_flags = move_flags_now;
-    if !swimming && !moving && !airborne {
-        anim_flags &= !(move_flags::TURN_LEFT | move_flags::TURN_RIGHT);
-        if body_turn_step > 1e-5 {
-            anim_flags |= move_flags::TURN_LEFT; // +yaw = turning left
-        } else if body_turn_step < -1e-5 {
-            anim_flags |= move_flags::TURN_RIGHT;
-        }
-    }
+    let anim_flags = advance_heading(
+        &mut heading,
+        ControlInput::default(),
+        dt,
+        turn_rate,
+        super::STATIONARY_CHASE_RATE,
+        move_flags_now,
+        swimming,
+        moving,
+        airborne,
+        steering,
+    );
+    player.face_yaw = heading.facing;
+    player.model_yaw = heading.body;
     anim_flags
 }
 

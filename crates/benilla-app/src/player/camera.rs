@@ -950,17 +950,15 @@ pub(super) fn run_look_session(
     // Look rotation; a right-drag also turns the character.
     if let Some(active) = rig.look {
         let delta = motion;
-        let d_yaw = -delta.x * yaw_rate;
+        let (d_yaw, d_pitch) = benilla_player_control::mouse_look_deltas(
+            Vec3::new(delta.x, delta.y, 0.0),
+            yaw_rate,
+            pitch_rate,
+            look_cfg.invert_pitch,
+        );
         cam.yaw += d_yaw;
-        // `mouseInvertPitch` flips only the pitch axis.
-        let dy = if look_cfg.invert_pitch {
-            -delta.y
-        } else {
-            delta.y
-        };
         // The pivot's fork: a pinned camera looking level or up, dragged mostly vertically, spends
         // the delta on the pitch bias; `None` means the integrator does not run.
-        let d_pitch = -dy * pitch_rate;
         if let Some(d_pitch) = rig.smart_pivot.route_pitch(
             d_pitch,
             d_yaw,

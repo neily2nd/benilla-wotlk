@@ -16,6 +16,7 @@ dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev"]
 tracy = ["bevy/trace_tracy"]
 # Writes every system's per-run span to `trace-<ts>.json` in the cwd.
 trace_chrome = ["bevy/trace_chrome"]
+offline-poc = []
 
 [dependencies]
 anyhow.workspace = true
@@ -46,6 +47,7 @@ benilla-animation = { path = "../benilla-animation" }
 benilla-formats = { path = "../benilla-formats", default-features = false }
 benilla-protocol = { path = "../benilla-protocol" }
 benilla-movement = { path = "../benilla-movement" }
+benilla-player-control = { path = "../benilla-player-control" }
 benilla-world = { path = "../benilla-world", default-features = false }
 # `cache.md5`, the account data's per-slot checksums (`0x6b8ca0`).
 md-5 = "0.10"

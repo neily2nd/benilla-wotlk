@@ -44,6 +44,17 @@ fn view_start() -> [f32; 3] {
 /// The look-at height when `WOW_WORLDVIEW_AT` names no `z`, clear of the Northshire valley floor.
 const VIEW_OPEN_Z: f32 = 100.0;
 
+/// Enables the viewer's own free-fly input. Offline consumers may disable it while retaining its
+/// world, asset bootstrap, and camera entity for an alternate controller.
+#[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
+pub struct WorldviewFlyCam(pub bool);
+
+impl Default for WorldviewFlyCam {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 /// Near plane in yards: the `nearclip` CVar's default, since the viewer has no CVar table.
 const NEAR: f32 = crate::view::NEARCLIP_DEFAULT;
 
@@ -226,13 +237,21 @@ fn plugin(app: &mut App) {
         Startup,
         spawn_view_camera.after(benilla_assets::AssetSet::Open),
     )
-    .add_systems(Update, fly.in_set(crate::schedule::WorldStage::Input));
+    .add_systems(
+        Update,
+        fly.in_set(crate::schedule::WorldStage::Input)
+            .run_if(worldview_fly_enabled),
+    );
 
     // `WOW_WORLDVIEW_SHOT=<png>` (at `WOW_WORLDVIEW_SHOT_AT` seconds, default 20) writes one frame
     // and exits, with no subject gate: the client's live shot needs a player the engine lacks.
     if std::env::var("WOW_WORLDVIEW_SHOT").is_ok() {
         app.add_systems(Update, shoot_and_exit);
     }
+}
+
+fn worldview_fly_enabled(enabled: Option<Res<WorldviewFlyCam>>) -> bool {
+    enabled.is_none_or(|enabled| enabled.0)
 }
 
 /// Fires the `WOW_WORLDVIEW_SHOT` screenshot once and exits two seconds later: the write is

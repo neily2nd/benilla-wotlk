@@ -50,6 +50,11 @@ Past `run_with` and that folder, benilla opens a piece of itself to such a crate
 3.3.5a work creates that piece, never for the crate alone, and promises no stable API: a crate
 pins the benilla revision it builds on. What a crate cannot reach stays a fork's.
 
+An offline consumer that supplies its own player camera controller can use
+`benilla_world::worldview::run_with` and insert `WorldviewFlyCam(false)` before the viewer plugin is
+built. This leaves the viewer's world and asset bootstrap in place while disabling only its own
+free-fly input. The default remains enabled for the standalone viewer.
+
 ## How a change is judged
 
 1. `scripts/gates.sh` is green: fmt, clippy with warnings denied, the workspace tests, the
